@@ -5,6 +5,8 @@ pub use split::split_io;
 pub use split::IOReadHalf;
 pub use split::IOWriteHalf;
 
+pub use task::is_wall_set;
+pub use task::set_wall;
 pub use task::spawn;
 pub use task::spawn_blocking;
 pub use task::JoinHandle;

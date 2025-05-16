@@ -3,10 +3,16 @@
 use core::pin::Pin;
 use core::task::Context;
 use core::task::Poll;
+use std::cell::RefCell;
 use std::future::Future;
 use std::marker::PhantomData;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
+use tokio_util::sync::CancellationToken;
+
+thread_local! {
+  static WALL: RefCell<Option<CancellationToken>> = RefCell::default();
+}
 
 /// Equivalent to [`tokio::task::JoinHandle`].
 #[repr(transparent)]
@@ -46,6 +52,21 @@ impl<R> Future for JoinHandle<R> {
   }
 }
 
+pub fn is_wall_set() -> bool {
+  WALL.with_borrow(|it| it.is_some())
+}
+
+pub fn set_wall() -> CancellationToken {
+  let token = CancellationToken::new();
+  WALL.with_borrow_mut(|it| {
+    if let Some(old_token) = it.take() {
+      old_token.cancel();
+    }
+    *it = Some(token.clone());
+  });
+  token
+}
+
 /// Equivalent to [`tokio::task::spawn`], but does not require the future to be [`Send`]. Must only be
 /// used on a [`RuntimeFlavor::CurrentThread`] executor, though this is only checked when running with
 /// debug assertions.
@@ -57,9 +78,15 @@ pub fn spawn<F: Future<Output = R> + 'static, R: 'static>(
     Handle::current().runtime_flavor() == RuntimeFlavor::CurrentThread
   );
   // SAFETY: we know this is a current-thread executor
+  let token = WALL.with_borrow(|it| it.clone());
   let future = unsafe { MaskFutureAsSend::new(f) };
   JoinHandle {
-    handle: tokio::task::spawn(future),
+    handle: tokio::task::spawn(async move {
+      if let Some(token) = token {
+        token.cancelled().await;
+      }
+      future.await
+    }),
     _r: Default::default(),
   }
 }
